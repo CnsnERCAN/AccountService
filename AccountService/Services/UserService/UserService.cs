@@ -20,6 +20,6 @@ namespace AccountService.Services.UserService
 
             return result;
         }
-        
+
     }
 }
