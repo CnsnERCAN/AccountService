@@ -59,7 +59,7 @@ namespace AccountService.Controllers
                 return BadRequest("Kullanıcı bulunamamıştır");
             }
 
-            if (!VerifPasswordHash(request.Password, user.PasswordHash, user.PasswordSalt))
+            if (!VerifyPasswordHash(request.Password, user.PasswordHash, user.PasswordSalt))
             {
                 return BadRequest("Yanlış şifre!");
             }
@@ -145,7 +145,7 @@ namespace AccountService.Controllers
             }
         }
 
-        private bool VerifPasswordHash(string password, byte[] passwordHash, byte[] passwordSalt)
+        private bool VerifyPasswordHash(string password, byte[] passwordHash, byte[] passwordSalt)
         {
             using (var hmac = new HMACSHA512(passwordSalt))
             {
