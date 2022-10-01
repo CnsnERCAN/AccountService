@@ -1,4 +1,5 @@
-﻿using AccountService.Model.Dto;
+﻿using AccountService.Context;
+using AccountService.Model.Dto;
 using AccountService.Model.Entities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -15,15 +16,17 @@ namespace AccountService.Controllers
     [ApiController]
     public class AuthController : ControllerBase
     {
-        public static User user = new User();
+        //public static User user = new User();
+        private readonly AccountDbContext _accountDbContext;
 
         public IConfiguration _configuration { get; }
         public IUserService _userService { get; }
 
-        public AuthController(IConfiguration configuration, IUserService userService)
+        public AuthController(IConfiguration configuration, IUserService userService, AccountDbContext accountDbContext)
         {
             _configuration = configuration;
             _userService = userService;
+            _accountDbContext = accountDbContext;
         }
 
         [HttpGet, Authorize]
@@ -38,57 +41,70 @@ namespace AccountService.Controllers
             //return Ok(new { userName, userName2, role });
         }
 
-
         [HttpPost("register")]
         public async Task<ActionResult<User>> Register(UserDto request)
         {
+            if (VerifyUsernameExist(request.Username))
+            {
+                return BadRequest("Bu kullanıcı adı zaten alınmıştır.");
+            }
+
             CreatePasswordHash(request.Password, out byte[] passwordHash, out byte[] passwordSalt);
+            var newUser = new User
+            {
+                Username = request.Username,
+                PasswordHash = passwordHash,
+                PasswordSalt = passwordSalt,
+            };
+            _accountDbContext.Users.Add(newUser);
+            _accountDbContext.SaveChanges();
+            return Ok(newUser);
 
-            user.Username = request.Username;
-            user.PasswordHash = passwordHash;
-            user.PasswordSalt = passwordSalt;
-
-            return Ok(user);
+        }
+        private bool VerifyUsernameExist(string username)
+        {
+            return _accountDbContext.Users.Where(x => x.Username == username).Any();
         }
 
         [HttpPost("login")]
         public async Task<ActionResult<string>> Login(UserDto request)
         {
-            if (user.Username != request.Username)
+            var loginUser = _accountDbContext.Users.FirstOrDefault(x => x.Username == request.Username);
+            if (loginUser == null)
             {
                 return BadRequest("Kullanıcı bulunamamıştır");
             }
 
-            if (!VerifyPasswordHash(request.Password, user.PasswordHash, user.PasswordSalt))
+            if (!VerifyPasswordHash(request.Password, loginUser.PasswordHash, loginUser.PasswordSalt))
             {
                 return BadRequest("Yanlış şifre!");
             }
 
-            string token = CreateToken(user);
+            string token = CreateToken(loginUser.Username);
             var refreshToken = GenerateRefreshToken();
-            SetRefreshToken(refreshToken);
+            SetRefreshToken(refreshToken, loginUser);
             return Ok(token);
         }
 
-        [HttpPost("refresh-token")]
-        public async Task<ActionResult<string>> RefreshToken()
-        {
-            var refreshToken = Request.Cookies["refreshToken"];
-            if (!user.RefreshToken.Equals(refreshToken))
-            {
-                return Unauthorized("Invalid refresh token.");
-            }
-            else if(user.TokenExpires < DateTime.Now)
-            {
-                return Unauthorized("Token expired.");
-            }
+        //[HttpPost("refresh-token")]
+        //public async Task<ActionResult<string>> RefreshToken()
+        //{
+        //    var refreshToken = Request.Cookies["refreshToken"];
+        //    if (!user.RefreshToken.Equals(refreshToken))
+        //    {
+        //        return Unauthorized("Invalid refresh token.");
+        //    }
+        //    else if (user.TokenExpires < DateTime.Now)
+        //    {
+        //        return Unauthorized("Token expired.");
+        //    }
 
-            string token = CreateToken(user);
-            var newRefreshToken = GenerateRefreshToken();
-            SetRefreshToken(newRefreshToken);
+        //    string token = CreateToken(user);
+        //    var newRefreshToken = GenerateRefreshToken();
+        //    SetRefreshToken(newRefreshToken);
 
-            return Ok(token);
-        }
+        //    return Ok(token);
+        //}
 
         private RefreshToken GenerateRefreshToken()
         {
@@ -102,7 +118,7 @@ namespace AccountService.Controllers
             return refreshToken;
         }
 
-        private void SetRefreshToken(RefreshToken newRefreshToken)
+        private void SetRefreshToken(RefreshToken newRefreshToken, User loginUser)
         {
             var cookieOptions = new CookieOptions
             {
@@ -111,20 +127,22 @@ namespace AccountService.Controllers
             };
 
             Response.Cookies.Append("refreshToken", newRefreshToken.Token, cookieOptions);
-            user.RefreshToken = newRefreshToken.Token;
-            user.TokenCreated = newRefreshToken.Created;
-            user.TokenExpires = newRefreshToken.Expires;
+            loginUser.RefreshToken = newRefreshToken.Token;
+            loginUser.TokenCreated = newRefreshToken.Created;
+            loginUser.TokenExpires = newRefreshToken.Expires;
+
+            _accountDbContext.SaveChanges();
         }
 
-        private string CreateToken(User user)
+        private string CreateToken(string username)
         {
             List<Claim> claims = new List<Claim>
             {
-                new Claim(ClaimTypes.Name, user.Username),
+                new Claim(ClaimTypes.Name, username),
                 new Claim(ClaimTypes.Role, "Admin")
             };
 
-            var key = new SymmetricSecurityKey(System.Text.Encoding.UTF8.GetBytes(_configuration.GetSection("AppSettings:Token").Value));
+            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration.GetSection("AppSettings:Token").Value));
             var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha512Signature);
             var token = new JwtSecurityToken(
                 claims: claims,
@@ -132,7 +150,6 @@ namespace AccountService.Controllers
                 signingCredentials: creds);
 
             var jwt = new JwtSecurityTokenHandler().WriteToken(token);
-
             return jwt;
         }
 
